@@ -1,14 +1,21 @@
 [Unit]
 Description=cdman Pirate Audio display
+Documentation=https://github.com/cdmanbg/raspberry_retro_game_player
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=cdman
-WorkingDirectory=/home/cdman/cdman
-ExecStart=/usr/bin/python3 /home/cdman/cdman/cdman-display.py
+User=__USER__
+Group=__USER__
+WorkingDirectory=__APP_DIR__
+Environment=CDMAN_STATUS_FILE=/var/lib/cdman/status.json
+ExecStart=/usr/bin/python3 __APP_DIR__/cdman-display.py
 Restart=on-failure
 RestartSec=3
+MemoryMax=128M
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

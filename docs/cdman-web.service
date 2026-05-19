@@ -1,16 +1,23 @@
 [Unit]
 Description=cdman retro song web player
+Documentation=https://github.com/cdmanbg/raspberry_retro_game_player
 After=network-online.target sound.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=cdman
-WorkingDirectory=/home/cdman/cdman
-ExecStart=/usr/bin/python3 /home/cdman/cdman/cdman-web.py
+User=__USER__
+Group=__USER__
+WorkingDirectory=__APP_DIR__
+Environment=CDMAN_SONGS_DIR=/var/lib/cdman/songs
+Environment=CDMAN_STATUS_FILE=/var/lib/cdman/status.json
+ExecStart=/usr/bin/python3 __APP_DIR__/cdman-web.py
 Restart=on-failure
 RestartSec=3
-# Audio needs access to the user's audio group; pulse/pipewire users may also need:
-# Environment=XDG_RUNTIME_DIR=/run/user/1000
+# Be a good citizen: cap memory and tighten privileges a little
+MemoryMax=256M
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

@@ -290,8 +290,12 @@ def mix_song(song):
 def find_song_file(name):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [name]
+    # Honor CDMAN_SONGS_DIR if set (deployment puts songs outside the repo)
+    env_dir = os.environ.get("CDMAN_SONGS_DIR")
     for ext in (".json", ".txt"):
         candidates.append(name + ext)
+        if env_dir:
+            candidates.append(os.path.join(env_dir, name + ext))
         candidates.append(os.path.join("songs", name + ext))
         candidates.append(os.path.join(script_dir, name + ext))
         candidates.append(os.path.join(script_dir, "songs", name + ext))

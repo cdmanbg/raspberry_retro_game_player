@@ -15,7 +15,7 @@ What you need:
 
 ![Raspberry Pi Zero 2W](images/raspberry-pi-zero-2-w_1.jpg)
 
-2. Some Dac + AMP - I used Pirate Audio: 3W Stereo Amp for Raspberry Pi (https://shop.pimoroni.com/products/pirate-audio-3w-stereo-amp) , I used MONO switch and then only 1 speaker
+2. Some Dac + AMP - I used Pirate Audio: 3W Stereo Amp for Raspberry Pi (https://shop.pimoroni.com/products/pirate-audio-3w-stereo-amp) , I used MONO switch and then only 1 speaker, also pimorini GUTHUB page: (https://github.com/pimoroni/pirate-audio)
 
 ![Pirate Audio 3W Stereo Amp](images/pirate-audio-amp-01.png)
 
@@ -33,3 +33,6 @@ Note: You can use any other DAC/AMP compbination - I just had these laying arrou
 Since Pirate Audio: 3W Stereo Amp had screen, I used that one to print IP address from DHCP , so it was easy to access it via web browser at http://my_ip_addr:8080
 
 There is an option to play on browser or on device. Interface is pretty cool and easy to work with, and it allows you to compose on the screen, import from Arduino format, and play directly to check the result. There is option to change volume and tempo, and even Piano Roll menu.
+
+
+HOW TO INSTALL: see INSTALL.md

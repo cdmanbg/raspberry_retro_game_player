@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw, ImageFont
 import ST7789
 
 SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-STATUS_FILE = os.path.join(SCRIPT_DIR, "status.json")
+STATUS_FILE = os.environ.get("CDMAN_STATUS_FILE") or os.path.join(SCRIPT_DIR, "status.json")
 REFRESH_SEC = 1.0           # how often to repaint when nothing changed
 IP_REFRESH_SEC = 10.0       # re-query IP periodically (in case of DHCP changes)
 

@@ -18,9 +18,11 @@ from importlib.machinery import SourceFileLoader
 from flask import Flask, request, jsonify, abort
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SONGS_DIR = os.path.join(SCRIPT_DIR, "songs")
+# Allow deployment to override where user data lives so songs/status survive
+# a `git pull`. Defaults preserve the original single-folder layout.
+SONGS_DIR   = os.environ.get("CDMAN_SONGS_DIR")   or os.path.join(SCRIPT_DIR, "songs")
+STATUS_FILE = os.environ.get("CDMAN_STATUS_FILE") or os.path.join(SCRIPT_DIR, "status.json")
 PLAYER = os.path.join(SCRIPT_DIR, "cdman-player")
-STATUS_FILE = os.path.join(SCRIPT_DIR, "status.json")
 CONVERTER = os.path.join(SCRIPT_DIR, "cdman-convert")
 HOST = "0.0.0.0"
 PORT = 8080
