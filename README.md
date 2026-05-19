@@ -11,7 +11,7 @@ What you need:
 1. Raspberry Pi with WiFi/LAN port - no matter which one, I used Raspberry Pi Zero 2 W (https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)
 
 
-![Raspberry Pi Zero 2W](images/raspberry-pi-zero-2-w_1.jpg)
+![Raspberry Pi Zero 2W]([/cdmanbg/raspberry_retro_game_player/blob/main/imagas/raspberry-pi-zero-2-w_1.jpg)
 
 2. Some Dac + AMP - I used Pirate Audio: 3W Stereo Amp for Raspberry Pi (https://shop.pimoroni.com/products/pirate-audio-3w-stereo-amp) , I used MONO switch and then only 1 speaker
 
