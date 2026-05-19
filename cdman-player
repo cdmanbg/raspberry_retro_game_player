@@ -1,13 +1,29 @@
 #!/usr/bin/env python3
 """
-cdman-player - Retro game sound player
+cdman-player - Retro game sound player (multi-voice).
+
 Usage:
   ./cdman-player <songname>
   ./cdman-player <songname> --tempo 240 --volume 0.02
+
+Format:
+  TEMPO 220                 (optional)
+  VOLUME 0.01               (optional)
+
+  TRACK 1 PULSE             (optional - file with no TRACK lines is one PULSE track)
+  VOLUME 0.01               (optional per-track override)
+  A3 4
+  C4 4
+
+  TRACK 2 TRIANGLE
+  C2 2
+
+Waveforms: PULSE (default, square ~50%), TRIANGLE, NOISE.
+Noise channel ignores pitch - use 'X N' or any note name; only timing matters.
+REST works in any track.
 """
 import sys
 import os
-import time
 import json
 import argparse
 import numpy as np
@@ -43,35 +59,233 @@ NOTES = {
     "C8": 4186.01,
 }
 
-
-def square_wave(freq, duration, volume):
-    t = np.linspace(0, duration, int(SAMPLE_RATE * duration), False)
-    wave = np.sign(np.sin(2 * np.pi * freq * t))
-    fade = min(200, len(wave) // 10)
-    if fade > 0:
-        wave[:fade] *= np.linspace(0, 1, fade)
-        wave[-fade:] *= np.linspace(1, 0, fade)
-    return (wave * volume * 32767).astype(np.int16)
+VALID_WAVES = ("PULSE", "TRIANGLE", "NOISE")
 
 
-def play_note(note, divider, tempo, volume):
-    beat = 60 / tempo
-    duration = 4 / divider * beat
+# ============================================================
+# Waveform generators (return float32 in [-1, 1] at SAMPLE_RATE)
+# ============================================================
+
+def gen_pulse(freq, n_samples):
+    """Square wave ~50% duty. Same as the original cdman engine."""
+    t = np.arange(n_samples) / SAMPLE_RATE
+    return np.sign(np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def gen_triangle(freq, n_samples):
+    """Triangle wave - softer than square. Roughly 30-40% perceived
+    loudness vs square at the same amplitude, so the NES tradition is
+    to leave it at full amplitude in the mix - feels balanced."""
+    t = np.arange(n_samples) / SAMPLE_RATE
+    return (2 * np.abs(2 * (t * freq - np.floor(t * freq + 0.5))) - 1).astype(np.float32)
+
+
+# Single shared RNG so noise sounds the same across calls
+_noise_rng = np.random.default_rng(0xC0FFEE)
+
+def gen_noise(_freq, n_samples):
+    """White noise. Pitch ignored. Used for drums/percussion."""
+    # uniform [-1, 1); the spectrum is flat enough for chiptune-style hits
+    return (_noise_rng.random(n_samples, dtype=np.float32) * 2.0 - 1.0)
+
+
+WAVE_FUNCS = {
+    "PULSE":    gen_pulse,
+    "TRIANGLE": gen_triangle,
+    "NOISE":    gen_noise,
+}
+
+
+# ============================================================
+# Note rendering
+# ============================================================
+
+def render_note(note, divider, tempo, wave_kind, volume):
+    """Return a float32 array for one note (including its trailing gap)."""
+    beat = 60.0 / tempo
+    full_dur = (4.0 / divider) * beat * 1.10   # match original "* 1.10" gap
+    full_samples = max(1, int(round(full_dur * SAMPLE_RATE)))
+    # Sound duration is 1/1.10 of the slot, mirroring original behaviour.
+    sound_samples = max(1, int(round(full_dur / 1.10 * SAMPLE_RATE)))
+
+    buf = np.zeros(full_samples, dtype=np.float32)
     if note == "REST":
-        time.sleep(duration)
-        return
-    if note not in NOTES:
-        print(f"  ! unknown note: {note} (skipping)")
-        time.sleep(duration)
-        return
-    freq = NOTES[note]
-    arr = square_wave(freq, duration, volume)
-    stereo = np.column_stack((arr, arr))
-    sound = pygame.sndarray.make_sound(stereo)
-    sound.play()
-    time.sleep(duration * 1.10)
-    sound.stop()
+        return buf
 
+    if wave_kind == "NOISE":
+        freq = 0.0  # ignored
+    else:
+        freq = NOTES.get(note)
+        if freq is None:
+            # Unknown note (also covers things like "X" outside NOISE) -> silence.
+            return buf
+
+    wave = WAVE_FUNCS[wave_kind](freq, sound_samples) * volume
+
+    # Fade in/out, exactly like the original (200 samples max, or 10% of length)
+    fade = min(200, sound_samples // 10)
+    if fade > 0:
+        wave[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        wave[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+
+    buf[:sound_samples] = wave
+    return buf
+
+
+def render_track(notes, tempo, wave_kind, volume):
+    """Concatenate rendered notes into a single float32 stream."""
+    if not notes:
+        return np.zeros(0, dtype=np.float32)
+    parts = [render_note(n, d, tempo, wave_kind, volume) for n, d in notes]
+    return np.concatenate(parts)
+
+
+# ============================================================
+# Song parsing
+# ============================================================
+
+def _coerce_track(line_parts):
+    """'TRACK 2 TRIANGLE' -> (2, 'TRIANGLE'). 'TRACK 1' -> (1, 'PULSE')."""
+    # parts[0] == 'TRACK' already
+    idx = 1
+    wave = "PULSE"
+    if len(line_parts) >= 2:
+        try:
+            idx = int(line_parts[1])
+        except ValueError:
+            idx = 1
+    if len(line_parts) >= 3:
+        w = line_parts[2].upper()
+        if w in VALID_WAVES:
+            wave = w
+    return idx, wave
+
+
+def load_song(path):
+    """
+    Returns dict:
+      {
+        'tempo': float,
+        'volume': float,                 # master
+        'tracks': [
+            {'index': 1, 'wave': 'PULSE', 'volume': None or float,
+             'notes': [(note, divider), ...]},
+            ...
+        ]
+      }
+
+    Files with NO 'TRACK' line are treated as one PULSE track at master volume.
+    JSON format still supported for backwards compat (one track).
+    """
+    with open(path, "r") as f:
+        content = f.read()
+
+    tempo = 220.0
+    volume = 0.01
+    tracks = []
+    cur = None  # currently-being-filled track
+
+    stripped = content.strip()
+    if stripped.startswith("{"):
+        data = json.loads(stripped)
+        tempo = float(data.get("tempo", tempo))
+        volume = float(data.get("volume", volume))
+        notes = [(str(n).upper(), float(d)) for n, d in data.get("melody", [])]
+        tracks.append({"index": 1, "wave": "PULSE", "volume": None, "notes": notes})
+        return {"tempo": tempo, "volume": volume, "tracks": tracks}
+
+    for raw in content.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        key = parts[0].upper()
+
+        if key == "TEMPO" and len(parts) >= 2:
+            try:
+                tempo = float(parts[1])
+            except ValueError:
+                pass
+        elif key == "VOLUME" and len(parts) >= 2:
+            try:
+                v = float(parts[1])
+            except ValueError:
+                continue
+            if cur is None:
+                volume = v          # before any TRACK -> master volume
+            else:
+                cur["volume"] = v   # inside a track -> per-track volume
+        elif key == "TRACK":
+            idx, wave = _coerce_track(parts)
+            cur = {"index": idx, "wave": wave, "volume": None, "notes": []}
+            tracks.append(cur)
+        elif len(parts) >= 2:
+            # A note line: may contain multiple "NOTE DIVIDER" pairs.
+            if cur is None:
+                cur = {"index": 1, "wave": "PULSE", "volume": None, "notes": []}
+                tracks.append(cur)
+            # Walk pairs: even indices are notes, odd indices are dividers.
+            i = 0
+            while i < len(parts) - 1:
+                note = parts[i].upper()
+                try:
+                    divider = float(parts[i + 1])
+                except ValueError:
+                    # Unparseable - bail out for the rest of this line
+                    break
+                cur["notes"].append((note, divider))
+                i += 2
+        else:
+            print(f"  ! ignoring line: {raw!r}", file=sys.stderr)
+
+    # Empty file edge case - always return at least one (empty) track.
+    if not tracks:
+        tracks.append({"index": 1, "wave": "PULSE", "volume": None, "notes": []})
+
+    return {"tempo": tempo, "volume": volume, "tracks": tracks}
+
+
+# ============================================================
+# Mixing
+# ============================================================
+
+def mix_song(song):
+    """Render all tracks and mix to a stereo int16 buffer."""
+    tempo = song["tempo"]
+    master_vol = song["volume"]
+    rendered = []
+
+    # Render each non-empty track. Empty/no-notes tracks are skipped so they
+    # don't count toward the active-voice scaling.
+    for tr in song["tracks"]:
+        if not tr["notes"]:
+            continue
+        vol = tr["volume"] if tr["volume"] is not None else master_vol
+        rendered.append(render_track(tr["notes"], tempo, tr["wave"], vol))
+
+    if not rendered:
+        return np.zeros((1, 2), dtype=np.int16)
+
+    # Mixing rule: if only one track is active, use it as-is (so old single-voice
+    # songs sound IDENTICAL to before). With multiple tracks, scale by
+    # 1/sqrt(N) - perceptually balanced, prevents clipping.
+    n = len(rendered)
+    max_len = max(len(r) for r in rendered)
+    mix = np.zeros(max_len, dtype=np.float32)
+    for r in rendered:
+        mix[:len(r)] += r
+    if n > 1:
+        mix *= 1.0 / np.sqrt(n)
+
+    # Final safety: hard limit anything that would clip (rare).
+    np.clip(mix, -1.0, 1.0, out=mix)
+    mono = (mix * 32767.0).astype(np.int16)
+    return np.column_stack((mono, mono))
+
+
+# ============================================================
+# Playback
+# ============================================================
 
 def find_song_file(name):
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,45 +301,13 @@ def find_song_file(name):
     return None
 
 
-def load_song(path):
-    tempo = 220
-    volume = 0.01
-    melody = []
-    with open(path, "r") as f:
-        content = f.read()
-    stripped = content.strip()
-    if stripped.startswith("{"):
-        data = json.loads(stripped)
-        tempo = data.get("tempo", tempo)
-        volume = data.get("volume", volume)
-        melody = [(n, d) for n, d in data["melody"]]
-        return tempo, volume, melody
-    for raw in content.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.split()
-        key = parts[0].upper()
-        if key == "TEMPO" and len(parts) >= 2:
-            tempo = float(parts[1])
-        elif key == "VOLUME" and len(parts) >= 2:
-            volume = float(parts[1])
-        elif len(parts) >= 2:
-            note = parts[0].upper()
-            divider = float(parts[1])
-            melody.append((note, divider))
-        else:
-            print(f"  ! ignoring line: {raw!r}")
-    return tempo, volume, melody
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("song", help="song name (with or without extension)")
-    ap.add_argument("--tempo", type=float, default=None,
+    ap.add_argument("song")
+    ap.add_argument("--tempo",  type=float, default=None,
                     help="override song tempo (BPM)")
     ap.add_argument("--volume", type=float, default=None,
-                    help="override song volume (0.0 - 1.0)")
+                    help="override master volume (0.0 - 1.0)")
     args = ap.parse_args()
 
     path = find_song_file(args.song)
@@ -134,20 +316,34 @@ def main():
         sys.exit(2)
 
     print(f"Loading: {path}")
-    tempo, volume, melody = load_song(path)
-    if args.tempo is not None:
-        tempo = args.tempo
-    if args.volume is not None:
-        volume = max(0.0, min(1.0, args.volume))
-    print(f"Tempo={tempo}  Volume={volume}  Notes={len(melody)}")
+    song = load_song(path)
+    if args.tempo  is not None: song["tempo"]  = args.tempo
+    if args.volume is not None: song["volume"] = max(0.0, min(1.0, args.volume))
+
+    tracks_info = ", ".join(
+        f"#{t['index']}={t['wave']}({len(t['notes'])})"
+        for t in song["tracks"] if t["notes"]
+    ) or "(empty)"
+    print(f"Tempo={song['tempo']}  Volume={song['volume']}  Tracks: {tracks_info}")
+
+    print("Rendering...")
+    stereo = mix_song(song)
+    if stereo.shape[0] <= 1:
+        print("Nothing to play.")
+        return
 
     pygame.mixer.pre_init(SAMPLE_RATE, -16, 2, 512)
     pygame.init()
     try:
-        for note, dur in melody:
-            play_note(note, dur, tempo, volume)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+        sound = pygame.sndarray.make_sound(stereo)
+        sound.play()
+        # Wait, allowing Ctrl-C to interrupt
+        duration_ms = int(stereo.shape[0] / SAMPLE_RATE * 1000)
+        try:
+            pygame.time.wait(duration_ms + 100)
+        except KeyboardInterrupt:
+            sound.stop()
+            print("\nStopped.")
     finally:
         pygame.quit()
 

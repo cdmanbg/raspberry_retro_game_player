@@ -622,6 +622,55 @@ function browserStop() {
   updateNow();
 }
 
+// Schedule one track on Web Audio at its own timeline (starts at startTime).
+// Returns the end-time (when the last note's gap is over).
+function _scheduleTrack(ctx, master, track, tempo, masterVol, ampScale, startTime, noiseBuffer) {
+  const beat = 60 / tempo;
+  const vol = (track.volume != null) ? track.volume : masterVol;
+  let t = startTime;
+  for (const [note, divider] of track.notes) {
+    const fullDur = (4 / divider) * beat * 1.10;
+    const soundDur = fullDur / 1.10;
+    if (note !== 'REST') {
+      if (track.wave === 'NOISE') {
+        // Noise: use a short white-noise buffer source.
+        const src = ctx.createBufferSource();
+        src.buffer = noiseBuffer;
+        // Slight pitch shift for variety based on note name (optional flavor)
+        src.playbackRate.value = 1.0;
+        src.loop = true;
+        const g = ctx.createGain();
+        const fade = Math.min(0.005, soundDur / 10);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol * ampScale, t + fade);
+        g.gain.setValueAtTime(vol * ampScale, t + soundDur - fade);
+        g.gain.linearRampToValueAtTime(0, t + soundDur);
+        src.connect(g).connect(master);
+        src.start(t);
+        src.stop(t + soundDur + 0.02);
+      } else {
+        const freq = NOTE_FREQS[note];
+        if (freq) {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = (track.wave === 'TRIANGLE') ? 'triangle' : 'square';
+          osc.frequency.value = freq;
+          const fade = Math.min(0.01, soundDur / 10);
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(vol * ampScale, t + fade);
+          g.gain.setValueAtTime(vol * ampScale, t + soundDur - fade);
+          g.gain.linearRampToValueAtTime(0, t + soundDur);
+          osc.connect(g).connect(master);
+          osc.start(t);
+          osc.stop(t + soundDur + 0.02);
+        }
+      }
+    }
+    t += fullDur;
+  }
+  return t;
+}
+
 function browserPlay(name, parsed) {
   ensureAudio();
   const ctx = audioCtx;
@@ -638,32 +687,24 @@ function browserPlay(name, parsed) {
 
   const tempo  = currentTempo();
   const volume = currentVolume();
-  const beat   = 60 / tempo;
-  const ampScale = 0.6;
+  // Per-track scaling: matches the Pi engine's "1/sqrt(N) if N>1 else 1"
+  const activeTracks = (parsed.tracks || []).filter(tr => tr.notes && tr.notes.length > 0);
+  const N = activeTracks.length;
+  const ampScale = (N <= 1) ? 0.6 : (0.6 / Math.sqrt(N));
 
-  let t = ctx.currentTime + 0.05;
-  for (const [note, divider] of parsed.melody) {
-    const dur = (4 / divider) * beat;
-    if (note !== 'REST') {
-      const freq = NOTE_FREQS[note];
-      if (freq) {
-        const osc = ctx.createOscillator();
-        const g = ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.value = freq;
-        const fade = Math.min(0.01, dur / 10);
-        g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(volume * ampScale, t + fade);
-        g.gain.setValueAtTime(volume * ampScale, t + dur - fade);
-        g.gain.linearRampToValueAtTime(0, t + dur);
-        osc.connect(g).connect(master);
-        osc.start(t);
-        osc.stop(t + dur + 0.02);
-      }
-    }
-    t += dur * 1.10;
+  // Pre-build a small white-noise buffer (200ms) shared by all NOISE notes.
+  const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 0.2, ctx.sampleRate);
+  const nch = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < nch.length; i++) nch[i] = Math.random() * 2 - 1;
+
+  const startTime = ctx.currentTime + 0.05;
+  let maxEnd = startTime;
+  for (const tr of activeTracks) {
+    const end = _scheduleTrack(ctx, master, tr, tempo, volume, ampScale, startTime, noiseBuffer);
+    if (end > maxEnd) maxEnd = end;
   }
-  const totalDur = t - ctx.currentTime;
+  const totalDur = maxEnd - ctx.currentTime;
+
   setTimeout(() => {
     if (browserSession !== session) return;
     browserActive = false;
@@ -672,7 +713,8 @@ function browserPlay(name, parsed) {
     updateNow();
   }, Math.max(50, totalDur * 1000 + 100));
 
-  toast('Playing ' + name + ' (browser)');
+  const trackInfo = N > 1 ? ` (${N} voices)` : '';
+  toast('Playing ' + name + trackInfo + ' (browser)');
 }
 
 let currentView = 'text';
@@ -816,13 +858,64 @@ async function uploadFile(){const f=document.getElementById('fileInput').files[0
   const fd=new FormData();fd.append('file',f);
   try{const r=await fetch('/api/upload',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error||'upload failed');toast('Uploaded '+d.name);document.getElementById('fileInput').value='';await refresh();}catch(e){toast('Upload failed: '+e.message);}}
 
-function parseSong(text){const out={tempo:null,volume:null,melody:[]};const t=text.trim();
-  if(t.startsWith('{')){try{const j=JSON.parse(t);out.tempo=j.tempo??null;out.volume=j.volume??null;out.melody=(j.melody||[]).map(p=>[String(p[0]).toUpperCase(),Number(p[1])]);return out;}catch(e){}}
-  for(const raw of text.split(/\r?\n/)){const line=raw.split('#')[0].trim();if(!line)continue;const parts=line.split(/\s+/);const key=parts[0].toUpperCase();
-    if(key==='TEMPO'&&parts[1])out.tempo=parseFloat(parts[1]);
-    else if(key==='VOLUME'&&parts[1])out.volume=parseFloat(parts[1]);
-    else if(parts.length>=2)out.melody.push([key,parseFloat(parts[1])]);}
-  return out;}
+function parseSong(text){
+  // Returns {tempo, volume, melody, tracks}
+  // - melody: Track 1's notes (for piano-roll compat with single-voice files)
+  // - tracks: array of {index, wave, volume, notes} - always present
+  const out = {tempo: null, volume: null, melody: [], tracks: []};
+  const t = text.trim();
+  if (t.startsWith('{')) {
+    try {
+      const j = JSON.parse(t);
+      out.tempo  = j.tempo  ?? null;
+      out.volume = j.volume ?? null;
+      out.melody = (j.melody || []).map(p => [String(p[0]).toUpperCase(), Number(p[1])]);
+      out.tracks = [{index:1, wave:'PULSE', volume:null, notes:out.melody.slice()}];
+      return out;
+    } catch (e) {}
+  }
+  let cur = null; // current track being filled
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.split('#')[0].trim();
+    if (!line) continue;
+    const parts = line.split(/\s+/);
+    const key = parts[0].toUpperCase();
+    if (key === 'TEMPO' && parts[1]) {
+      out.tempo = parseFloat(parts[1]);
+    } else if (key === 'VOLUME' && parts[1]) {
+      const v = parseFloat(parts[1]);
+      if (cur === null) out.volume = v;   // before any TRACK -> master
+      else              cur.volume = v;   // inside a track -> per-track
+    } else if (key === 'TRACK') {
+      let idx = 1, wave = 'PULSE';
+      if (parts[1]) { const i = parseInt(parts[1], 10); if (!isNaN(i)) idx = i; }
+      if (parts[2]) { const w = parts[2].toUpperCase(); if (w==='PULSE'||w==='TRIANGLE'||w==='NOISE') wave = w; }
+      cur = {index: idx, wave: wave, volume: null, notes: []};
+      out.tracks.push(cur);
+    } else if (parts.length >= 2) {
+      if (cur === null) {
+        cur = {index: 1, wave: 'PULSE', volume: null, notes: []};
+        out.tracks.push(cur);
+      }
+      // Multiple "NOTE DIVIDER" pairs per line are allowed.
+      let i = 0;
+      while (i < parts.length - 1) {
+        const noteName = parts[i].toUpperCase();
+        const div = parseFloat(parts[i + 1]);
+        if (isNaN(div)) break;
+        cur.notes.push([noteName, div]);
+        i += 2;
+      }
+    }
+  }
+  if (out.tracks.length === 0) {
+    out.tracks.push({index:1, wave:'PULSE', volume:null, notes:[]});
+  }
+  // 'melody' mirrors Track 1's notes for piano-roll compatibility
+  const t1 = out.tracks.find(tr => tr.index === 1) || out.tracks[0];
+  out.melody = t1.notes.slice();
+  return out;
+}
 function serializeSong({tempo,volume,melody}){const lines=['# generated by cdman web editor'];if(tempo!=null)lines.push('TEMPO  '+tempo);if(volume!=null)lines.push('VOLUME '+volume);lines.push('');for(const [n,d] of melody)lines.push(n+' '+d);return lines.join('\n')+'\n';}
 
 const SEMITONES=['C','CS','D','DS','E','F','FS','G','GS','A','AS','B'];

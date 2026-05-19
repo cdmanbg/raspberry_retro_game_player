@@ -1,0 +1,25 @@
+# Twinkle Twinkle - 4 voice demo
+# Melody + harmony (third above) + bass + drum ticks
+TEMPO 110
+VOLUME 0.02
+
+TRACK 1 PULSE
+C4 4   C4 4   G4 4   G4 4   A4 4   A4 4   G4 2
+F4 4   F4 4   E4 4   E4 4   D4 4   D4 4   C4 2
+
+TRACK 2 PULSE
+VOLUME 0.012
+E4 4   E4 4   C5 4   C5 4   F5 4   F5 4   E5 2
+A4 4   A4 4   G4 4   G4 4   F4 4   F4 4   E4 2
+
+TRACK 3 TRIANGLE
+VOLUME 0.025
+C3 2   C3 2   F3 2   C3 2
+F3 2   C3 2   G3 2   C3 2
+
+TRACK 4 NOISE
+VOLUME 0.005
+X 8   X 8   X 8   X 8   X 8   X 8   X 8   X 8
+X 8   X 8   X 8   X 8   X 8   X 8   X 8   X 8
+X 8   X 8   X 8   X 8   X 8   X 8   X 8   X 8
+X 8   X 8   X 8   X 8   X 8   X 8   X 8   X 8
