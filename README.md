@@ -2,9 +2,11 @@
 
 Raspberry Pi buzzer like player, inspired by hibit-dev/buzzer arduino project, to play old retro game mellodies with RPi and little DAC+AMP+Speaker. 
 
-I really enjoyed playing with hibit-dev/buzzer specially when I created tones for Karateka 1984 by Jordan Mechner, so I wanted to play more, but Arduino felt very limited with no quolity of life extras like Online Editor. You need to change code, upload it and then check result, that was really slow for me. 
+I really enjoyed playing with hibit-dev/buzzer specially when I created tones for Karateka 1984 by Jordan Mechner, so I wanted to play more, but Arduino felt very limited with no quolity of life extras like Online Editor, play in browser, change notes or tempo very quickly. You need to change code, upload it and then check result, that was really slow for me. 
 
-So I decided to go with Raspberry Pi 2 Zero + Dac/AMP + Speaker - this way I had more room for improvements, WEB server which I can access remotely, and use with it Online Editor/Player. Project was fully created by Claude.AI in few hours of vibe coding. 
+So I decided to go with Raspberry Pi Zero 2W + Dac/AMP + Speaker - this way I had more room for improvements, WEB server which I can access remotely, and use with it Online Editor/Player. Project was fully created by Claude.AI in few hours of vibe coding. 
+
+Also I added 4 tracks now, which can be used as Bass/Drums/Lead - you can check that with 4voice-twinkle.txt
 
 What you need: 
 
@@ -22,14 +24,11 @@ What you need:
 ![Visaton FR7 - 8ohm](images/visaton_fr7_8ohm_01.jpg)
 
 
-
-
 And here is the final result - with some heatsink + battery power ( optional )
 
 ![Final Device](images/rpi_player_01.png)
 
 Note: You can use any other DAC/AMP compbination - I just had these laying arround. 
-
 
 Since Pirate Audio: 3W Stereo Amp had screen, I used that one to print IP address from DHCP , so it was easy to access it via web browser at http://my_ip_addr:8080
 
