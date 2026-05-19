@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""
+cdman-convert - convert Arduino Tone-style song files into cdman .txt format.
+
+Usage:
+  ./cdman-convert input.ino                 # writes input.txt next to it
+  ./cdman-convert input.ino output.txt
+  ./cdman-convert -                          # read from stdin, write to stdout
+
+Recognized in the input:
+  int tempo = 120;            (optional, default 120)
+  int melody[]    = { NOTE_C4, NOTE_D4, NOTE_REST, ... };
+  int durations[] = { 4, 8, 4, ... };
+
+Notes:
+  - Arduino NOTE_xx macros are mapped by stripping the NOTE_ prefix.
+  - NOTE_REST / REST / 0 / NOTE_0 become REST.
+  - Dotted durations (e.g. "8.") become divider / 1.5 (passed as a float).
+  - The converter aligns melody and durations by index; if lengths differ,
+    it pairs as many as it can and reports the mismatch.
+  - Stray tokens (like 'NOTE_FS4|' from typos) are dropped with a warning.
+"""
+import os
+import re
+import sys
+import argparse
+
+
+REST_TOKENS = {"REST", "NOTE_REST", "0", "NOTE_0"}
+
+
+def parse_array(src: str, name: str):
+    """Return the raw inside of `<type> <name>[] = { ... };`, or None if not found."""
+    # Match "<typeword> <name>[] = { ... };" allowing spaces and newlines.
+    pat = re.compile(
+        r"\b\w+\s+" + re.escape(name) + r"\s*\[\s*\]\s*=\s*\{(.*?)\}\s*;",
+        re.DOTALL,
+    )
+    m = pat.search(src)
+    return m.group(1) if m else None
+
+
+def tokenize(arr_body: str):
+    """Split array body on commas, strip whitespace, drop empties and stray pipes."""
+    raw = [t.strip() for t in arr_body.split(",")]
+    out = []
+    for t in raw:
+        if not t:
+            continue
+        # Strip C-style line/block comments inside a token (rare but possible)
+        t = re.sub(r"//.*", "", t)
+        t = re.sub(r"/\*.*?\*/", "", t, flags=re.DOTALL).strip()
+        if not t:
+            continue
+        out.append(t)
+    return out
+
+
+def clean_note_token(tok: str):
+    """Map a melody token to a cdman note string, or return None if junk.
+
+    Handles things like 'NOTE_FS4', 'NOTE_FS4|' (stray bitwise from typos),
+    bare 'FS4', 'REST', '0'.
+    """
+    s = tok.strip().rstrip(",")
+    # Drop bitwise / arithmetic suffixes that shouldn't be there in a note list.
+    s = re.split(r"[|&^+\-*/]", s, maxsplit=1)[0].strip()
+    if not s:
+        return None
+    if s.upper() in REST_TOKENS:
+        return "REST"
+    if s.upper().startswith("NOTE_"):
+        s = s[5:]
+    s = s.upper()
+    # Accept C4, CS4, DS5, ..., C8. Reject anything else.
+    if re.fullmatch(r"[A-G]S?\d", s):
+        return s
+    return None
+
+
+def clean_duration_token(tok: str):
+    """Return a float divider, or None.
+
+    '4' -> 4.0
+    '8.' -> 8 / 1.5 (dotted eighth)
+    '0' or junk -> None
+    """
+    s = tok.strip().rstrip(",")
+    s = re.split(r"[|&^+\-*/]", s, maxsplit=1)[0].strip()
+    dotted = s.endswith(".")
+    if dotted:
+        s = s[:-1]
+    if not s:
+        return None
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    if v <= 0:
+        return None
+    if dotted:
+        # A dotted note is 1.5x as long => effective divider is v/1.5.
+        v = v / 1.5
+    return v
+
+
+def find_int(src: str, name: str, default=None):
+    """Find 'int <name> = N;' or 'const int <name> = N;' (positive int only)."""
+    m = re.search(r"\b(?:const\s+)?(?:int|float|double)\s+" + re.escape(name)
+                  + r"\s*=\s*(\d+(?:\.\d+)?)\s*;", src)
+    if not m:
+        return default
+    try:
+        v = float(m.group(1))
+        return int(v) if v == int(v) else v
+    except ValueError:
+        return default
+
+
+def convert(src: str, default_tempo: int = 120, default_volume: float = 0.01):
+    """Return (text_output, warnings, stats)."""
+    warnings = []
+    melody_body = parse_array(src, "melody")
+    if melody_body is None:
+        raise ValueError("No 'melody[] = { ... }' array found in input.")
+    durations_body = parse_array(src, "durations")
+    if durations_body is None:
+        # Some Arduino sketches name it differently
+        for alt in ("noteDurations", "durs", "rhythm"):
+            durations_body = parse_array(src, alt)
+            if durations_body is not None:
+                warnings.append(f"using duration array named '{alt}'")
+                break
+    if durations_body is None:
+        raise ValueError("No 'durations[] = { ... }' array found in input.")
+
+    raw_notes = tokenize(melody_body)
+    raw_durs  = tokenize(durations_body)
+
+    notes, dropped_notes = [], 0
+    for tok in raw_notes:
+        n = clean_note_token(tok)
+        if n is None:
+            dropped_notes += 1
+            warnings.append(f"dropped melody token: {tok!r}")
+        else:
+            notes.append(n)
+
+    durs, dropped_durs = [], 0
+    for tok in raw_durs:
+        d = clean_duration_token(tok)
+        if d is None:
+            dropped_durs += 1
+            warnings.append(f"dropped duration token: {tok!r}")
+        else:
+            durs.append(d)
+
+    pair_count = min(len(notes), len(durs))
+    if len(notes) != len(durs):
+        warnings.append(
+            f"length mismatch: notes={len(notes)} durations={len(durs)} "
+            f"-> pairing first {pair_count}"
+        )
+
+    tempo = find_int(src, "tempo", default_tempo)
+
+    lines = []
+    lines.append("# converted from Arduino Tone format")
+    lines.append(f"TEMPO  {tempo}")
+    lines.append(f"VOLUME {default_volume}")
+    lines.append("")
+    for note, div in zip(notes[:pair_count], durs[:pair_count]):
+        # Print whole-number dividers without trailing zero
+        if float(div).is_integer():
+            lines.append(f"{note} {int(div)}")
+        else:
+            lines.append(f"{note} {div:g}")
+
+    stats = {
+        "notes_in":  len(raw_notes),
+        "durs_in":   len(raw_durs),
+        "notes_out": pair_count,
+        "tempo":     tempo,
+        "dropped_notes": dropped_notes,
+        "dropped_durs":  dropped_durs,
+    }
+    return "\n".join(lines) + "\n", warnings, stats
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Convert Arduino Tone song to cdman .txt")
+    ap.add_argument("input",  help="input file, or '-' for stdin")
+    ap.add_argument("output", nargs="?",
+                    help="output file (default: input with .txt extension, or stdout for '-')")
+    ap.add_argument("--tempo",  type=int,   default=120,
+                    help="tempo to use if not declared in source (default: 120)")
+    ap.add_argument("--volume", type=float, default=0.01,
+                    help="volume header to write (default: 0.01)")
+    args = ap.parse_args()
+
+    if args.input == "-":
+        src = sys.stdin.read()
+        out_path = args.output
+    else:
+        with open(args.input, "r") as f:
+            src = f.read()
+        if args.output:
+            out_path = args.output
+        else:
+            base, _ = os.path.splitext(args.input)
+            out_path = base + ".txt"
+
+    try:
+        text, warnings, stats = convert(src, args.tempo, args.volume)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    for w in warnings:
+        print(f"warn: {w}", file=sys.stderr)
+    print(
+        f"converted: {stats['notes_out']} notes "
+        f"(in: {stats['notes_in']} notes / {stats['durs_in']} durations, "
+        f"tempo={stats['tempo']})",
+        file=sys.stderr,
+    )
+
+    if out_path is None or out_path == "-":
+        sys.stdout.write(text)
+    else:
+        with open(out_path, "w") as f:
+            f.write(text)
+        print(f"wrote {out_path}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

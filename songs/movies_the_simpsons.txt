@@ -1,0 +1,25 @@
+# converted from Arduino Tone format
+TEMPO  220
+VOLUME 0.01
+
+C4 2
+E4 4
+FS4 4
+REST 32
+A4 8
+G4 2
+E4 4
+C4 4
+A3 8
+FS3 8
+FS3 8
+FS3 8
+G3 4
+REST 2
+FS3 8
+FS3 8
+FS3 8
+G3 4
+AS3 2
+B3 2
+REST 2

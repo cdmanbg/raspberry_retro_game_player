@@ -1,0 +1,16 @@
+[Unit]
+Description=cdman retro song web player
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+User=cdman
+WorkingDirectory=/home/cdman/cdman
+ExecStart=/usr/bin/python3 /home/cdman/cdman/cdman-web.py
+Restart=on-failure
+RestartSec=3
+# Audio needs access to the user's audio group; pulse/pipewire users may also need:
+# Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+[Install]
+WantedBy=multi-user.target
