@@ -11,7 +11,7 @@ Imager), SSH in and run:
 ```bash
 sudo apt update && sudo apt install -y git
 sudo git clone https://github.com/cdmanbg/raspberry_retro_game_player.git /srv/rpi_retro_game_player
-sudo /srv/rpi_retro_game_player/install.sh
+sudo bash /srv/rpi_retro_game_player/install.sh
 ```
 
 If the installer says a reboot is needed (it changed boot config for the
@@ -20,7 +20,7 @@ Pirate Audio DAC), reboot and run it again:
 ```bash
 sudo reboot
 # after reboot:
-sudo /srv/rpi_retro_game_player/install.sh
+sudo bash /srv/rpi_retro_game_player/install.sh
 ```
 
 When it finishes, open `http://<pi-ip>:8080` (or `http://<hostname>.local:8080`)
